@@ -185,6 +185,9 @@ public class JobHistory extends AbstractService implements HistoryContext {
     @Override
     public void run() {
       try {
+        LOG.info("Starting get job info from zookeeper and init history jobs to cache");
+        HistoryFileInfoToZk historyFileInfoToZk = HistoryFileInfoToZk.getZnodeInstance();
+        historyFileInfoToZk.scanZnodeToIntermediateCache(hsManager,HistoryFileManager.zookeeperPoolManager);
         LOG.info("Starting scan to move intermediate done files");
         hsManager.scanIntermediateDirectory();
       } catch (IOException e) {

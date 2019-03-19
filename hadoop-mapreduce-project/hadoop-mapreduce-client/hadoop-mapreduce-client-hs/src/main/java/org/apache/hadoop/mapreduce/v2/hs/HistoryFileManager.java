@@ -59,6 +59,7 @@ import org.apache.hadoop.mapred.JobACLsManager;
 import org.apache.hadoop.mapreduce.jobhistory.JobSummary;
 import org.apache.hadoop.mapreduce.v2.api.records.JobId;
 import org.apache.hadoop.mapreduce.v2.app.job.Job;
+import org.apache.hadoop.mapreduce.v2.hs.zookeeperTool.ZookeeperPoolManager;
 import org.apache.hadoop.mapreduce.v2.jobhistory.FileNameIndexUtils;
 import org.apache.hadoop.mapreduce.v2.jobhistory.JHAdminConfig;
 import org.apache.hadoop.mapreduce.v2.jobhistory.JobHistoryUtils;
@@ -82,11 +83,15 @@ import org.apache.hadoop.yarn.util.SystemClock;
 public class HistoryFileManager extends AbstractService {
   private static final Log LOG = LogFactory.getLog(HistoryFileManager.class);
   private static final Log SUMMARY_LOG = LogFactory.getLog(JobSummary.class);
+  protected static ZookeeperPoolManager zookeeperPoolManager;
+  static {
+    zookeeperPoolManager = ZookeeperPoolManager.getInstance();
+  }
 
   private static enum HistoryInfoState {
     IN_INTERMEDIATE, IN_DONE, DELETED, MOVE_FAILED
   };
-  
+
   private static String DONE_BEFORE_SERIAL_TAIL = JobHistoryUtils
       .doneSubdirsBeforeSerialTail();
 
@@ -302,7 +307,7 @@ public class HistoryFileManager extends AbstractService {
 
   /**
    * This class represents a user dir in the intermediate done directory.  This
-   * is mostly for locking purposes. 
+   * is mostly for locking purposes.
    */
   private class UserLogDir {
     long modTime = 0;
@@ -368,7 +373,7 @@ public class HistoryFileManager extends AbstractService {
     synchronized boolean didMoveFail() {
       return state == HistoryInfoState.MOVE_FAILED;
     }
-    
+
     /**
      * @return true if the files backed by this were deleted.
      */
@@ -455,7 +460,7 @@ public class HistoryFileManager extends AbstractService {
     /**
      * Parse a job from the JobHistoryFile, if the underlying file is not going
      * to be deleted.
-     * 
+     *
      * @return the Job or null if the underlying file was deleted.
      * @throws IOException
      *           if there is an error trying to read the file.
@@ -472,7 +477,7 @@ public class HistoryFileManager extends AbstractService {
     synchronized Path getHistoryFile() {
       return historyFile;
     }
-    
+
     protected synchronized void delete() throws IOException {
       if (LOG.isDebugEnabled()) {
         LOG.debug("deleting " + historyFile + " and " + confFile);
@@ -493,7 +498,7 @@ public class HistoryFileManager extends AbstractService {
     public synchronized Path getConfFile() {
       return confFile;
     }
-    
+
     public synchronized Configuration loadConfFile() throws IOException {
       FileContext fc = FileContext.getFileContext(confFile.toUri(), conf);
       Configuration jobConf = new Configuration(false);
@@ -513,7 +518,7 @@ public class HistoryFileManager extends AbstractService {
    * Maintains a mapping between intermediate user directories and the last
    * known modification time.
    */
-  private ConcurrentMap<String, UserLogDir> userDirModificationTimeMap = 
+  private ConcurrentMap<String, UserLogDir> userDirModificationTimeMap =
     new ConcurrentHashMap<String, UserLogDir>();
 
   private JobACLsManager aclsMgr;
@@ -532,7 +537,7 @@ public class HistoryFileManager extends AbstractService {
   @VisibleForTesting
   protected ThreadPoolExecutor moveToDoneExecutor = null;
   private long maxHistoryAge = 0;
-  
+
   public HistoryFileManager() {
     super(HistoryFileManager.class.getName());
   }
@@ -555,7 +560,7 @@ public class HistoryFileManager extends AbstractService {
 
     maxHistoryAge = conf.getLong(JHAdminConfig.MR_HISTORY_MAX_AGE_MS,
         JHAdminConfig.DEFAULT_MR_HISTORY_MAX_AGE);
-    
+
     jobListCache = createJobListCache();
 
     serialNumberIndex = new SerialNumberIndex(conf.getInt(
@@ -722,7 +727,7 @@ public class HistoryFileManager extends AbstractService {
     }
     for (int i= timestampedDirList.size() - 1;
         i >= 0 && !jobListCache.isFull(); i--) {
-      FileStatus fs = timestampedDirList.get(i); 
+      FileStatus fs = timestampedDirList.get(i);
       addDirectoryToJobListCache(fs.getPath());
     }
   }
@@ -811,11 +816,11 @@ public class HistoryFileManager extends AbstractService {
       FileContext fc) throws IOException {
     return scanDirectory(path, fc, JobHistoryUtils.getHistoryFileFilter());
   }
-  
+
   /**
    * Finds all history directories with a timestamp component by scanning the
    * filesystem. Used when the JobHistory server is started.
-   * 
+   *
    * @return list of history directories
    */
   protected List<FileStatus> findTimestampedDirectories() throws IOException {
@@ -827,9 +832,9 @@ public class HistoryFileManager extends AbstractService {
   /**
    * Scans the intermediate directory to find user directories. Scans these for
    * history files if the modification time for the directory has changed. Once
-   * it finds history files it starts the process of moving them to the done 
+   * it finds history files it starts the process of moving them to the done
    * directory.
-   * 
+   *
    * @throws IOException
    *           if there was a error while scanning
    */
@@ -855,7 +860,7 @@ public class HistoryFileManager extends AbstractService {
 
   /**
    * Scans the specified path and populates the intermediate cache.
-   * 
+   *
    * @param absPath
    * @throws IOException
    */
@@ -901,8 +906,13 @@ public class HistoryFileManager extends AbstractService {
             public void run() {
               try {
                 found.moveToDone();
+                //把job的元信息发送到zk
+                LOG.info("Begin to populates the intermediate cache of jobId:" + String.valueOf(found.getJobId()));
+                HistoryFileInfoToZk historyFileInfoToZk = HistoryFileInfoToZk
+                        .getInstance();
+                historyFileInfoToZk.uploadJobInfo(zookeeperPoolManager,found.getJobId().getAppId().getId(),found.getJobId().getAppId().getClusterTimestamp());
               } catch (IOException e) {
-                LOG.info("Failed to process fileInfo for job: " + 
+                LOG.info("Failed to process fileInfo for job: " +
                     found.getJobId(), e);
               }
             }
@@ -920,7 +930,7 @@ public class HistoryFileManager extends AbstractService {
 
   /**
    * Searches the job history file FileStatus list for the specified JobId.
-   * 
+   *
    * @param fileStatusList
    *          fileStatus list of Job History Files.
    * @param jobId
@@ -951,7 +961,7 @@ public class HistoryFileManager extends AbstractService {
    * Scans old directories known by the idToDateString map for the specified
    * jobId. If the number of directories is higher than the supported size of
    * the idToDateString cache, the jobId will not be found.
-   * 
+   *
    * @param jobId
    *          the jobId.
    * @return
@@ -1077,7 +1087,7 @@ public class HistoryFileManager extends AbstractService {
 
   /**
    * Clean up older history files.
-   * 
+   *
    * @throws IOException
    *           on any error trying to remove the entries.
    */
@@ -1122,7 +1132,7 @@ public class HistoryFileManager extends AbstractService {
       }
     }
   }
-  
+
   protected boolean deleteDir(FileStatus serialDir)
       throws AccessControlException, FileNotFoundException,
       UnsupportedFileSystemException, IOException {
@@ -1132,5 +1142,5 @@ public class HistoryFileManager extends AbstractService {
   @VisibleForTesting
   protected void setMaxHistoryAge(long newValue){
     maxHistoryAge=newValue;
-  } 
+  }
 }
