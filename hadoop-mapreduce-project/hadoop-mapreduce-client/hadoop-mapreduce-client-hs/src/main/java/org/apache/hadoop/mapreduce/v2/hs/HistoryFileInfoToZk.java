@@ -28,13 +28,7 @@ import org.apache.zookeeper.ZooDefs.Ids;
 import org.apache.zookeeper.ZooKeeper;
 
 
-/**
- * Created by IntelliJ IDEA. org.apache.hadoop.mapreduce.v2.hs
- *
- * @author: 01377851
- * @Date: 2019/3/4
- * @create: 7:43 PM
- */
+
 public class HistoryFileInfoToZk {
 
     private static final Log LOG = LogFactory.getLog(HistoryFileInfoToZk.class);
